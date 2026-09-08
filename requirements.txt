@@ -1,7 +1,11 @@
-ultralytics>=8.0.0
-opencv-python-headless>=4.8.0
-streamlit>=1.30.0
-torch>=2.0.0
-numpy>=1.23.0
-pillow>=9.0.0
-lapx
+# Nethra AI - Streamlit Community Cloud (CPU-only)
+# No packages.txt / apt needed: OpenCV comes from the headless wheel (no libGL, no glib).
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.2,<2.6
+torchvision>=0.17,<0.21
+numpy<2.3
+streamlit>=1.36
+ultralytics>=8.2,<9
+lapx>=0.5.5
+# Keep this LAST so it is installed after ultralytics pulled in opencv-python; app.py also self-heals if not.
+opencv-python-headless>=4.9
