@@ -21,7 +21,7 @@ import numpy as np
 import torch
 from ultralytics import YOLO
 
-ENGINE_VERSION = "6.2"         # app.py checks this to guarantee both files are the matched pair
+ENGINE_VERSION = "6.1"         # app.py checks this to guarantee both files are the matched pair
 
 # ---------------- Perception ----------------
 MODEL_PATH = "yolov8n.pt"
@@ -461,14 +461,9 @@ class SpatialPlanner:
 
     # ---- per frame ----
     def process(self, frame_bgr, speed_kmh, road_mu, critical_distance=CRITICAL_DISTANCE, conf=CONF_THRESHOLD,
-                enhance=False, infer_every=INFER_EVERY, imgsz=INFER_IMGSZ, render_max_height=0):
+                enhance=False, infer_every=INFER_EVERY, imgsz=INFER_IMGSZ):
         global _S
         t0 = now = time.perf_counter()
-        if render_max_height and frame_bgr.shape[0] > render_max_height:
-            # Optional cost cap (Cloud Lite): downscale the source ONCE, up front. Perception, depth, planning
-            # and overlays all run in this frame's own coordinates, so nothing downstream changes.
-            scale = render_max_height / frame_bgr.shape[0]
-            frame_bgr = cv2.resize(frame_bgr, (int(frame_bgr.shape[1] * scale), render_max_height), interpolation=cv2.INTER_LINEAR)
         dh, dw = frame_bgr.shape[:2]
         _S = dh / 720.0
         canvas = frame_bgr                      # draw on the NATIVE frame - no downscale
@@ -606,7 +601,6 @@ class VideoInferenceWorker(threading.Thread):
 
     def __init__(self, video_path, model, speed_kmh=45.0, road_mu=ROAD_MU_DRY, critical_distance=CRITICAL_DISTANCE,
                  conf=CONF_THRESHOLD, loop=True, enhance=False, infer_every=INFER_EVERY, imgsz=INFER_IMGSZ,
-                 render_max_height=0, frame_stride=1, jpeg_quality=JPEG_QUALITY,
                  encode_jpeg=True, realtime=False):
         super().__init__(daemon=True, name="NethraSpatialPlanner")
         self.video_path, self.model = video_path, model
@@ -616,7 +610,6 @@ class VideoInferenceWorker(threading.Thread):
         self.speed_kmh, self.road_mu = speed_kmh, road_mu
         self.critical_distance, self.conf = critical_distance, conf
         self.loop, self.enhance, self.infer_every, self.imgsz = loop, enhance, infer_every, imgsz
-        self.render_max_height, self.frame_stride, self.jpeg_quality = render_max_height, max(1, frame_stride), jpeg_quality
         self.encode_jpeg = encode_jpeg
         self._stop_evt, self._pause_evt, self._seek_to = threading.Event(), threading.Event(), None
         self.frame_idx, self.source_fps, self.error = 0, 30.0, None
@@ -697,15 +690,11 @@ class VideoInferenceWorker(threading.Thread):
                         self._rewind(cap); deadline = time.perf_counter(); continue
                     break
                 self.frame_idx = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
-                stride_extra = 0
-                for _ in range(max(1, int(self.frame_stride)) - 1):     # source stride: skip decode work entirely
-                    if cap.grab(): stride_extra += 1
                 canvas, tel = self.planner.process(frame, self.speed_kmh, self.road_mu, critical_distance=self.critical_distance,
                                                    conf=self.conf, enhance=self.enhance,
-                                                   infer_every=self.infer_every, imgsz=self.imgsz,
-                                                   render_max_height=self.render_max_height)
+                                                   infer_every=self.infer_every, imgsz=self.imgsz)
                 if self.encode_jpeg:
-                    ok_enc, buf = cv2.imencode(".jpg", canvas, [cv2.IMWRITE_JPEG_QUALITY, int(self.jpeg_quality)])
+                    ok_enc, buf = cv2.imencode(".jpg", canvas, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
                     payload = buf.tobytes() if ok_enc else None
                 else:
                     payload = canvas
@@ -714,7 +703,7 @@ class VideoInferenceWorker(threading.Thread):
                 fps_ema = (1 / dt) if fps_ema is None else 0.9 * fps_ema + 0.1 / dt
                 self.stats["fps"] = round(fps_ema, 1); self.stats["buffer"] = self.out_queue.qsize()
                 tel.update({"fps": self.stats["fps"], "frame_idx": self.frame_idx, "source_fps": round(self.source_fps, 1),
-                            "period_s": period, "advanced": advanced + stride_extra,
+                            "period_s": period, "advanced": advanced,
                             "dropped": self.stats["dropped"], "skipped": self.stats["skipped"],
                             "buffer": self.stats["buffer"],
                             "jpeg_kb": round(len(payload) / 1024, 1) if isinstance(payload, (bytes, bytearray)) else None})
